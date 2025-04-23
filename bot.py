@@ -360,19 +360,20 @@ async def cmd_points(message: types.Message, state: FSMContext):
 async def cmd_bonuses(message: types.Message, state: FSMContext):
     logging.info(f"Command /bonuses received from user {message.from_user.id}")
     await state.set_state(PartnerOnboarding.showing_bonuses)
-    await message.answer(TEXTS_RU["bonuses_title"], reply_markup=get_common_section_kb("back_to_main_menu"), disable_web_page_preview=True)
+    await message.answer(TEXTS_RU["bonuses_title"] + "\n\n" + TEXTS_RU["bonuses_text"], reply_markup=get_common_section_kb("back_to_main_menu"), disable_web_page_preview=True) # ИСПРАВЛЕНО: Добавлен текст бонусов
 
 @dp.message_handler(commands=['rules'], state='*')
 async def cmd_rules(message: types.Message, state: FSMContext):
     logging.info(f"Command /rules received from user {message.from_user.id}")
     await state.set_state(PartnerOnboarding.showing_rules)
-    await message.answer(TEXTS_RU["rules_title"], reply_markup=get_common_section_kb("back_to_main_menu"), disable_web_page_preview=True)
+    await message.answer(TEXTS_RU["rules_title"] + "\n\n" + TEXTS_RU["rules_text"], reply_markup=get_common_section_kb("back_to_main_menu"), disable_web_page_preview=True) # ИСПРАВЛЕНО: Добавлен текст правил
 
 @dp.message_handler(commands=['contacts'], state='*')
 async def cmd_contacts(message: types.Message, state: FSMContext):
     logging.info(f"Command /contacts received from user {message.from_user.id}")
     await state.set_state(PartnerOnboarding.showing_contacts)
-    await message.answer(TEXTS_RU["contacts_title"], reply_markup=get_common_section_kb("back_to_main_menu"), disable_web_page_preview=True)
+    contacts_text = TEXTS_RU["contacts_text"]() # Форматируем ссылки
+    await message.answer(TEXTS_RU["contacts_title"] + "\n\n" + contacts_text, reply_markup=get_common_section_kb("back_to_main_menu"), disable_web_page_preview=True) # ИСПРАВЛЕНО: Добавлен текст контактов
 
 @dp.message_handler(commands=['help'], state='*')
 async def cmd_help(message: types.Message, state: FSMContext):
@@ -394,15 +395,15 @@ async def cmd_help(message: types.Message, state: FSMContext):
 
 # --- Хендлеры Колбэков ---
 
-# Обработка выбора роли
-@dp.callback_query_handler(lambda c: c.data.startswith('role_'), state=PartnerOnboarding.awaiting_role)
-async def cq_process_role_choice(callback_query: types.CallbackQuery, state: FSMContext):
+# ДОБАВЛЕННЫЙ HANDLER: Обработка выбора роли из ГЛАВНОГО МЕНЮ (когда state=None)
+@dp.callback_query_handler(lambda c: c.data.startswith('role_'), state=None)
+async def cq_select_role_from_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
     role = callback_query.data.split('_')[1]
-    logging.info(f"Role '{role}' chosen by user {callback_query.from_user.id}")
+    logging.info(f"Role '{role}' selected from main menu by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     await state.update_data(chosen_role=role) # Сохраняем роль в FSM
 
-    # Отправляем меню для выбранной роли
+    # Показываем меню для выбранной роли
     if role == 'referral':
         await PartnerOnboarding.showing_referral_menu.set()
         await send_or_edit(callback_query.message, TEXTS_RU["referral_menu_title"], reply_markup=get_referral_menu_kb())
@@ -410,10 +411,38 @@ async def cq_process_role_choice(callback_query: types.CallbackQuery, state: FSM
         await PartnerOnboarding.showing_integrator_menu.set()
         await send_or_edit(callback_query.message, TEXTS_RU["integrator_menu_title"], reply_markup=get_integrator_menu_kb())
     else:
+        logging.error(f"Unknown role callback from main menu: {callback_query.data}")
+        await callback_query.message.answer(TEXTS_RU["error_occurred"])
+        await show_main_menu(callback_query.message, state) # Возвращаем в главное меню
+
+    current_state = await state.get_state() # Получаем новое установленное состояние
+    logging.info(f"Set state to {current_state} for user {callback_query.from_user.id}")
+
+
+# СУЩЕСТВУЮЩИЙ HANDLER: Обработка ВЫБОРА РОЛИ (после /start)
+@dp.callback_query_handler(lambda c: c.data.startswith('role_'), state=PartnerOnboarding.awaiting_role)
+async def cq_process_role_choice(callback_query: types.CallbackQuery, state: FSMContext):
+    # --- Этот код остается БЕЗ ИЗМЕНЕНИЙ от твоей версии ---
+    role = callback_query.data.split('_')[1]
+    logging.info(f"Initial role '{role}' chosen by user {callback_query.from_user.id}")
+    await bot.answer_callback_query(callback_query.id)
+    await state.update_data(chosen_role=role)
+
+    if role == 'referral':
+        await PartnerOnboarding.showing_referral_menu.set()
+        # Используем edit_text здесь, т.к. это гарантированно редактирование сообщения с кнопками выбора роли
+        await callback_query.message.edit_text(TEXTS_RU["referral_menu_title"], reply_markup=get_referral_menu_kb())
+    elif role == 'integrator':
+        await PartnerOnboarding.showing_integrator_menu.set()
+        await callback_query.message.edit_text(TEXTS_RU["integrator_menu_title"], reply_markup=get_integrator_menu_kb())
+    else:
         logging.error(f"Unknown role callback: {callback_query.data}")
         await callback_query.message.answer(TEXTS_RU["error_occurred"])
         await state.finish()
-    logging.info(f"Set state to {await state.get_state()} for user {callback_query.from_user.id}")
+    current_state = await state.get_state()
+    logging.info(f"Set state to {current_state} for user {callback_query.from_user.id}")
+    # --- Конец неизмененного блока ---
+
 
 # Обработка кнопок "Назад"
 @dp.callback_query_handler(lambda c: c.data == 'back_to_main_menu', state='*')
@@ -437,20 +466,21 @@ async def cq_back_to_role_menu(callback_query: types.CallbackQuery, state: FSMCo
     else:
         logging.warning(f"Cannot go back to role menu, role unknown for user {callback_query.from_user.id}. Showing main menu.")
         await show_main_menu(callback_query.message, state) # Если роль не найдена, показываем главное меню
-    logging.info(f"Set state to {await state.get_state()} for user {callback_query.from_user.id}")
+    current_state = await state.get_state()
+    logging.info(f"Set state to {current_state} for user {callback_query.from_user.id}")
 
 
 # --- Хендлеры для МЕНЮ РЕФЕРАЛА ---
 @dp.callback_query_handler(lambda c: c.data.startswith('ref_'), state=PartnerOnboarding.showing_referral_menu)
 async def cq_referral_menu_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    action = callback_query.data.split('_')[1] # show_details, show_levels
+    action = callback_query.data.split('_')[-1] # Берем последнее слово (details, levels)
     logging.info(f"Referral menu action '{action}' requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     back_button_kb = get_common_section_kb("back_to_role_menu") # Кнопка Назад ведет в меню реферала
 
-    if action == 'show_details':
+    if action == 'details': # ИСПРАВЛЕНО: было 'show_details'
         await send_or_edit(callback_query.message, TEXTS_RU["referral_details_title"] + "\n\n" + TEXTS_RU["referral_details_text"], reply_markup=back_button_kb)
-    elif action == 'show_levels':
+    elif action == 'levels': # ИСПРАВЛЕНО: было 'show_levels'
         await send_or_edit(callback_query.message, TEXTS_RU["referral_levels_title"] + "\n\n" + TEXTS_RU["referral_levels_text"], reply_markup=back_button_kb)
     # Другие кнопки меню реферала обрабатываются общими хендлерами ниже (show_points_prizes и т.д.)
 
@@ -458,66 +488,84 @@ async def cq_referral_menu_handler(callback_query: types.CallbackQuery, state: F
 # --- Хендлеры для МЕНЮ ИНТЕГРАТОРА ---
 @dp.callback_query_handler(lambda c: c.data.startswith('int_'), state=PartnerOnboarding.showing_integrator_menu)
 async def cq_integrator_menu_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    action = callback_query.data.split('_')[1] # show_details, show_levels
+    action = callback_query.data.split('_')[-1] # Берем последнее слово (details, levels)
     logging.info(f"Integrator menu action '{action}' requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     back_button_kb = get_common_section_kb("back_to_role_menu") # Кнопка Назад ведет в меню интегратора
 
-    if action == 'show_details':
+    if action == 'details': # ИСПРАВЛЕНО: было 'show_details'
         await send_or_edit(callback_query.message, TEXTS_RU["integrator_details_title"] + "\n\n" + TEXTS_RU["integrator_details_text"], reply_markup=back_button_kb)
-    elif action == 'show_levels':
+    elif action == 'levels': # ИСПРАВЛЕНО: было 'show_levels'
         await send_or_edit(callback_query.message, TEXTS_RU["integrator_levels_title"] + "\n\n" + TEXTS_RU["integrator_levels_text"], reply_markup=back_button_kb)
     # Другие кнопки меню интегратора обрабатываются общими хендлерами ниже
 
 
-# --- ОБЩИЕ Хендлеры для разделов (из любого меню) ---
+# --- ОБЩИЕ Хендлеры для разделов (из любого меню или по команде) ---
 @dp.callback_query_handler(lambda c: c.data == 'show_points_prizes', state='*')
 async def cq_show_points_prizes(callback_query: types.CallbackQuery, state: FSMContext):
     logging.info(f"Points/Prizes section requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     await state.set_state(PartnerOnboarding.showing_points_prizes)
+    # Определяем, куда должна вести кнопка Назад
+    user_data = await state.get_data()
+    current_state_name = await state.get_state()
+    back_callback = "back_to_role_menu" if current_state_name in [PartnerOnboarding.showing_referral_menu.state, PartnerOnboarding.showing_integrator_menu.state] else "back_to_main_menu"
+
     await send_or_edit(callback_query.message, TEXTS_RU["points_title"] + "\n\n" + TEXTS_RU["points_text"], disable_web_page_preview=True)
-    await callback_query.message.answer(TEXTS_RU["prizes_title"]+ "\n\n" + TEXTS_RU["prizes_text"], reply_markup=get_common_section_kb("back_to_role_menu"), disable_web_page_preview=True)
+    # Отправляем каталог призов отдельным сообщением с кнопкой Назад
+    await callback_query.message.answer(TEXTS_RU["prizes_title"]+ "\n\n" + TEXTS_RU["prizes_text"], reply_markup=get_common_section_kb(back_callback), disable_web_page_preview=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'show_bonuses', state='*')
 async def cq_show_bonuses(callback_query: types.CallbackQuery, state: FSMContext):
     logging.info(f"Bonuses section requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     await state.set_state(PartnerOnboarding.showing_bonuses)
-    await send_or_edit(callback_query.message, TEXTS_RU["bonuses_title"] + "\n\n" + TEXTS_RU["bonuses_text"], reply_markup=get_common_section_kb("back_to_role_menu"), disable_web_page_preview=True)
+    user_data = await state.get_data()
+    current_state_name = await state.get_state()
+    back_callback = "back_to_role_menu" if current_state_name in [PartnerOnboarding.showing_referral_menu.state, PartnerOnboarding.showing_integrator_menu.state] else "back_to_main_menu"
+    await send_or_edit(callback_query.message, TEXTS_RU["bonuses_title"] + "\n\n" + TEXTS_RU["bonuses_text"], reply_markup=get_common_section_kb(back_callback), disable_web_page_preview=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'show_rules', state='*')
 async def cq_show_rules(callback_query: types.CallbackQuery, state: FSMContext):
     logging.info(f"Rules section requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     await state.set_state(PartnerOnboarding.showing_rules)
-    await send_or_edit(callback_query.message, TEXTS_RU["rules_title"] + "\n\n" + TEXTS_RU["rules_text"], reply_markup=get_common_section_kb("back_to_role_menu"), disable_web_page_preview=True)
+    user_data = await state.get_data()
+    current_state_name = await state.get_state()
+    back_callback = "back_to_role_menu" if current_state_name in [PartnerOnboarding.showing_referral_menu.state, PartnerOnboarding.showing_integrator_menu.state] else "back_to_main_menu"
+    await send_or_edit(callback_query.message, TEXTS_RU["rules_title"] + "\n\n" + TEXTS_RU["rules_text"], reply_markup=get_common_section_kb(back_callback), disable_web_page_preview=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'show_details', state='*')
 async def cq_show_details(callback_query: types.CallbackQuery, state: FSMContext):
     logging.info(f"Details section requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     await state.set_state(PartnerOnboarding.showing_details)
-    # Используем lambda для форматирования ссылки на соглашение
+    user_data = await state.get_data()
+    current_state_name = await state.get_state()
+    back_callback = "back_to_role_menu" if current_state_name in [PartnerOnboarding.showing_referral_menu.state, PartnerOnboarding.showing_integrator_menu.state] else "back_to_main_menu"
     details_text = TEXTS_RU["important_details_text"](agr_link=PARTNER_AGREEMENT_URL)
-    await send_or_edit(callback_query.message, TEXTS_RU["important_details_title"] + "\n\n" + details_text, reply_markup=get_common_section_kb("back_to_role_menu"), disable_web_page_preview=True)
+    await send_or_edit(callback_query.message, TEXTS_RU["important_details_title"] + "\n\n" + details_text, reply_markup=get_common_section_kb(back_callback), disable_web_page_preview=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'show_how_to_start', state='*')
 async def cq_show_how_to_start(callback_query: types.CallbackQuery, state: FSMContext):
     logging.info(f"How to Start section requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
-    # Используем lambda для форматирования всех ссылок
+    user_data = await state.get_data()
+    current_state_name = await state.get_state()
+    back_callback = "back_to_role_menu" if current_state_name in [PartnerOnboarding.showing_referral_menu.state, PartnerOnboarding.showing_integrator_menu.state] else "back_to_main_menu"
     start_text = TEXTS_RU["how_to_start_text"]()
-    await send_or_edit(callback_query.message, TEXTS_RU["how_to_start_title"] + "\n\n" + start_text, reply_markup=get_common_section_kb("back_to_role_menu"), disable_web_page_preview=True)
+    await send_or_edit(callback_query.message, TEXTS_RU["how_to_start_title"] + "\n\n" + start_text, reply_markup=get_common_section_kb(back_callback), disable_web_page_preview=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'show_contacts', state='*')
 async def cq_show_contacts(callback_query: types.CallbackQuery, state: FSMContext):
     logging.info(f"Contacts section requested by user {callback_query.from_user.id}")
     await bot.answer_callback_query(callback_query.id)
     await state.set_state(PartnerOnboarding.showing_contacts)
-    # Используем lambda для форматирования контактов
+    user_data = await state.get_data()
+    current_state_name = await state.get_state()
+    back_callback = "back_to_role_menu" if current_state_name in [PartnerOnboarding.showing_referral_menu.state, PartnerOnboarding.showing_integrator_menu.state] else "back_to_main_menu"
     contacts_text = TEXTS_RU["contacts_text"]()
-    await send_or_edit(callback_query.message, TEXTS_RU["contacts_title"] + "\n\n" + contacts_text, reply_markup=get_common_section_kb("back_to_role_menu"), disable_web_page_preview=True)
+    await send_or_edit(callback_query.message, TEXTS_RU["contacts_title"] + "\n\n" + contacts_text, reply_markup=get_common_section_kb(back_callback), disable_web_page_preview=True)
 
 
 # --- Хендлеры для FAQ ---
